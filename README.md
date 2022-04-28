@@ -65,4 +65,5 @@ The project is in alpha, more features are required. But it is used in productio
 * work with commune names and INSEE codes;
 * configurable nearby search (distance,...);
 * visualization tools (maps);
+* interface with official address geocoding from [adresse.data.gouv.fr](https://adresse.data.gouv.fr/api-doc/adresse)
 * and many more...
