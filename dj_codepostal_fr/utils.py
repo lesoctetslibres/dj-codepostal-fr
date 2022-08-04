@@ -250,14 +250,14 @@ class _PostalCodesCompletion:
         cached = cache.get(cache_key)
         if cached is not None:
             if not cached:
-                return None
+                return cached
             return self._refine_results(code_portion, cached)
 
         # 2. reading from DB
         try:
             result = CodePostalCompletions.complete(code_portion)
             cache.set(cache_key, result, timeout=None)
-
+            return result
         except CodePostalCompletions.DoesNotExist:
             pass
 
