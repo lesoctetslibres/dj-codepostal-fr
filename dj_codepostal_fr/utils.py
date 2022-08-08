@@ -21,6 +21,10 @@ logger = logging.getLogger("codepostal.utils")
 _cache_key_prefix = "codepostal.utils._AeL3zuay"
 
 
+class DatanovaThrottlingException(RuntimeError):
+    pass
+
+
 def _handle_api_errors(
     response: requests.Response, cache_key: str
 ) -> Union[bool, requests.Response]:
@@ -32,8 +36,10 @@ def _handle_api_errors(
         # store False with timeout matching the throttling reset time
         reset_time = parse_datetime(response.json().get("reset_time", ""))
         timeout = reset_time - datetime.now(UTC)
-        cache.set(cache_key, False, timeout=timeout.seconds + 1)
-        return False
+        cache.set(
+            _cache_key_prefix + "/datanova_throttled", True, timeout=timeout.seconds + 1
+        )
+        raise DatanovaThrottlingException()
 
     # default
     logger.error(
@@ -41,6 +47,21 @@ def _handle_api_errors(
     )
     cache.set(cache_key, False)  # use default timeout, store False
     return False
+
+
+def _call(params, cache_key):
+    if cache.get(_cache_key_prefix + "/datanova_throttled"):
+        raise DatanovaThrottlingException()
+
+    response = _handle_api_errors(
+        requests.get(
+            # "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
+            "https://example.com",
+            params=params,
+        ),
+        cache_key,
+    )
+    return response
 
 
 def postal_codes_nearby(
@@ -66,17 +87,14 @@ def postal_codes_nearby(
         lon = coords["lon"]
         lat = coords["lat"]
 
-    response = _handle_api_errors(
-        requests.get(
-            "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
-            params={
-                "where": f'distance(coordonnees_gps,geom\'{{"type": "Point","coordinates":[{lon},{lat}]}}\',{dist_km}km)',
-                "group_by": "code_postal",
-                "limit": 30,
-                "offset": 0,
-                "timezone": "UTC",
-            },
-        ),
+    response = _call(
+        {
+            "where": f'distance(coordonnees_gps,geom\'{{"type": "Point","coordinates":[{lon},{lat}]}}\',{dist_km}km)',
+            "group_by": "code_postal",
+            "limit": 30,
+            "offset": 0,
+            "timezone": "UTC",
+        },
         cache_key,
     )
     if not response:
@@ -99,19 +117,14 @@ def fetch_postal_code_locations():
         return 0
 
     cache_key = _cache_key_prefix + "multiple_locations"
-    response = _handle_api_errors(
-        requests.get(
-            "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
-            params={
-                "select": "coordonnees_gps,code_postal",
-                "where": " or ".join(
-                    [f"code_postal={code}" for code in missing_locations]
-                ),
-                "limit": 30,
-                "offset": 0,
-                "timezone": "UTC",
-            },
-        ),
+    response = _call(
+        {
+            "select": "coordonnees_gps,code_postal",
+            "where": " or ".join([f"code_postal={code}" for code in missing_locations]),
+            "limit": 30,
+            "offset": 0,
+            "timezone": "UTC",
+        },
         cache_key,
     )
     if not response:
@@ -173,17 +186,14 @@ def postal_code_location(postal_code: Any) -> Union[None, Dict[str, float]]:
         pass
 
     # 3. reading from API
-    response = _handle_api_errors(
-        requests.get(
-            "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
-            params={
-                "select": "coordonnees_gps",
-                "where": f"code_postal={postal_code}",
-                "limit": 30,
-                "offset": 0,
-                "timezone": "UTC",
-            },
-        ),
+    response = _call(
+        {
+            "select": "coordonnees_gps",
+            "where": f"code_postal={postal_code}",
+            "limit": 30,
+            "offset": 0,
+            "timezone": "UTC",
+        },
         cache_key,
     )
 
@@ -262,17 +272,14 @@ class _PostalCodesCompletion:
             pass
 
         # 3. reading from API
-        response = _handle_api_errors(
-            requests.get(
-                "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
-                params={
-                    "group_by": "code_postal",
-                    "where": f"search(code_postal,'{code_portion_key}')",
-                    "limit": 100,
-                    "offset": 0,
-                    "timezone": "UTC",
-                },
-            ),
+        response = _call(
+            {
+                "group_by": "code_postal",
+                "where": f"search(code_postal,'{code_portion_key}')",
+                "limit": 100,
+                "offset": 0,
+                "timezone": "UTC",
+            },
             cache_key,
         )
         if not response:
@@ -294,3 +301,71 @@ _postal_code_regex = re.compile(r"[0-9]{5}")
 
 def is_candidate_postal_code(code):
     return bool(_postal_code_regex.match(code))
+
+
+def complete_and_suggest(postal_codes: List[str], term: str):
+    completion = []
+
+    if len(term) >= 3:
+        try:
+            term_completion = postal_codes_completion(term)
+            if term_completion:
+                completion += [
+                    {"id": value, "text": value}
+                    for value in term_completion
+                    if value not in postal_codes
+                ]
+            else:
+                completion += [
+                    {
+                        "text": "Aucun code postal ne correspond",
+                        "children": [],
+                    }
+                ]
+        except DatanovaThrottlingException:
+            if is_candidate_postal_code(term):
+                # allow to force a postal code that match the postal code regex
+                term_completion = [{"id": term, "text": term}]
+            else:
+                term_completion = []
+            completion.append(
+                {
+                    "text": "Impossible d'obtenir les suggestions de codes postaux",
+                    "children": term_completion,
+                }
+            )
+
+    res = []
+
+    if completion:
+        res += completion
+
+    if postal_codes:
+        try:
+            # get neighbors of the last 5 postal_codes only
+            # for performance and because of LaPoste API rate limitations
+            neighbors = set(
+                [
+                    near
+                    for code in postal_codes[-5:]
+                    for near in (postal_codes_nearby(postal_code=code) or [])
+                    if not term or near.startswith(term)
+                ]
+            )
+            # convert to list of dict and remove already selected items
+            neighbors = [
+                {"id": str(near), "text": str(near)}
+                for near in neighbors
+                if near not in postal_codes
+            ]
+            if neighbors:
+                res.append({"text": "À proximité", "children": neighbors})
+        except DatanovaThrottlingException:
+            res.append(
+                {
+                    "text": "Impossible d'obtenir les suggestions à proximité",
+                    "children": [],
+                }
+            )
+
+    return res
