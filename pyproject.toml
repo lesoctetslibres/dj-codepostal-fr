@@ -6,11 +6,12 @@ authors = ["Jules Waldhart <jules.waldhart@lesoctetslibres.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.10"
-django-select2 = "^7.10.0"
-pytz = "^2022.1"
+python = ">=3.6"
+django-select2 = ">=7.10.0"
+django = ">=3.2"
 
 [tool.poetry.dev-dependencies]
+pytz = ">=2022.1"
 coverage = "^6.4.3"
 
 [build-system]
