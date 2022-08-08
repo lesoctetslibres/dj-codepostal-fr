@@ -25,6 +25,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+poetry.lock
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -50,6 +51,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+coverage.lcov
 
 # Translations
 *.mo
@@ -106,6 +108,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.direnv
 
 # mkdocs documentation
 /site
