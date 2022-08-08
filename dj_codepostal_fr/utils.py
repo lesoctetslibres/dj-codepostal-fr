@@ -55,8 +55,7 @@ def _call(params, cache_key):
 
     response = _handle_api_errors(
         requests.get(
-            # "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
-            "https://example.com",
+            "https://datanova.laposte.fr/api/v2/catalog/datasets/laposte_hexasmal/records",
             params=params,
         ),
         cache_key,
